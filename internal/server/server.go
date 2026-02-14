@@ -150,6 +150,8 @@ func (s *Server) setupRoutes() {
 			r.Get("/metrics/nodes/{name}", s.handleNodeMetrics)
 			r.Get("/metrics/pods/{namespace}/{name}/history", s.handlePodMetricsHistory)
 			r.Get("/metrics/nodes/{name}/history", s.handleNodeMetricsHistory)
+			r.Get("/metrics/top/pods", s.handleTopPods)
+			r.Get("/metrics/top/nodes", s.handleTopNodes)
 
 			// Port forwarding
 			r.Get("/portforwards", s.handleListPortForwards)
@@ -1055,6 +1057,36 @@ func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request
 	}
 
 	s.writeJSON(w, history)
+}
+
+// handleTopPods returns the latest metrics for all pods (bulk endpoint for table view)
+func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
+	store := k8s.GetMetricsHistory()
+	if store == nil {
+		s.writeJSON(w, []k8s.TopPodMetrics{})
+		return
+	}
+
+	metrics := store.GetAllPodMetricsLatest()
+	if metrics == nil {
+		metrics = []k8s.TopPodMetrics{}
+	}
+	s.writeJSON(w, metrics)
+}
+
+// handleTopNodes returns the latest metrics for all nodes (bulk endpoint for table view)
+func (s *Server) handleTopNodes(w http.ResponseWriter, r *http.Request) {
+	store := k8s.GetMetricsHistory()
+	if store == nil {
+		s.writeJSON(w, []k8s.TopNodeMetrics{})
+		return
+	}
+
+	metrics := store.GetAllNodeMetricsLatest()
+	if metrics == nil {
+		metrics = []k8s.TopNodeMetrics{}
+	}
+	s.writeJSON(w, metrics)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

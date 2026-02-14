@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useCallback, useRef, forwardRef } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef, forwardRef, useContext } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useLocation } from 'react-router-dom'
 import { useQueries } from '@tanstack/react-query'
-import { ApiError, isForbiddenError, useSecretCertExpiry } from '../../api/client'
+import { ApiError, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics } from '../../api/client'
+import type { TopPodMetrics, TopNodeMetrics } from '../../api/client'
 import {
   Search,
   RefreshCw,
@@ -18,6 +19,8 @@ import {
   Clock,
   Filter,
   X,
+  Columns3,
+  RotateCcw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
@@ -178,6 +181,7 @@ const ALWAYS_SHOWN_KINDS = new Set([
   'Event',
 ])
 
+
 // Selected resource type info (need both name for API and kind for display)
 interface SelectedKindInfo {
   name: string      // Plural name for API calls (e.g., 'pods')
@@ -192,6 +196,9 @@ interface Column {
   width?: string
   hideOnMobile?: boolean
   tooltip?: string // Explanation of what this column means
+  defaultVisible?: boolean // false = hidden by default, shown via column picker
+  defaultWidth?: number // default width in px (used for resizable columns)
+  minWidth?: number // minimum width in px
 }
 
 // Default columns for unknown resource types (CRDs)
@@ -208,7 +215,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-16' },
     { key: 'status', label: 'Status', width: 'w-40' },
+    { key: 'cpu', label: 'CPU', width: 'w-20', defaultVisible: false, tooltip: 'Current CPU usage in cores' },
+    { key: 'memory', label: 'Memory', width: 'w-24', defaultVisible: false, tooltip: 'Current memory usage' },
     { key: 'restarts', label: 'Restarts', width: 'w-24' },
+    { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
     { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-14' },
   ],
@@ -271,6 +281,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'roles', label: 'Roles', width: 'w-28' },
+    { key: 'cpu', label: 'CPU', width: 'w-24', defaultVisible: false, tooltip: 'Current CPU usage / capacity' },
+    { key: 'memory', label: 'Memory', width: 'w-28', defaultVisible: false, tooltip: 'Current memory usage / capacity' },
     { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
     { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
     { key: 'version', label: 'Version', width: 'w-28' },
@@ -729,6 +741,47 @@ function getColumnsForKind(kind: string): Column[] {
   return KNOWN_COLUMNS[kind.toLowerCase()] || DEFAULT_COLUMNS
 }
 
+// Get the default visible columns for a kind
+function getDefaultVisibleColumns(columns: Column[]): Set<string> {
+  return new Set(columns.filter(c => c.defaultVisible !== false).map(c => c.key))
+}
+
+// localStorage helpers for column settings
+const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
+
+interface ColumnSettings {
+  visible: string[]
+  widths: Record<string, number>
+}
+
+function loadColumnSettings(kind: string): ColumnSettings | null {
+  try {
+    const raw = localStorage.getItem(COLUMN_SETTINGS_PREFIX + kind)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return null
+}
+
+function saveColumnSettings(kind: string, settings: ColumnSettings) {
+  try {
+    localStorage.setItem(COLUMN_SETTINGS_PREFIX + kind, JSON.stringify(settings))
+  } catch { /* ignore */ }
+}
+
+function clearColumnSettings(kind: string) {
+  try {
+    localStorage.removeItem(COLUMN_SETTINGS_PREFIX + kind)
+  } catch { /* ignore */ }
+}
+
+// Metrics context for passing top metrics to cell renderers without prop drilling
+interface MetricsLookup {
+  pods: Map<string, TopPodMetrics>   // key: "namespace/name"
+  nodes: Map<string, TopNodeMetrics> // key: node name
+}
+
+const MetricsContext = React.createContext<MetricsLookup>({ pods: new Map(), nodes: new Map() })
+
 interface ResourcesViewProps {
   namespaces: string[]
   selectedResource?: SelectedResource | null
@@ -793,6 +846,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [showFilterDropdown, setShowFilterDropdown] = useState(false)
   // ReplicaSet-specific: hide inactive by default
   const [showInactiveReplicaSets, setShowInactiveReplicaSets] = useState(initialFilters.showInactive)
+  // Column visibility and resize state
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [showColumnPicker, setShowColumnPicker] = useState(false)
+  const columnPickerRef = useRef<HTMLDivElement>(null)
   // Label/owner filtering for deep-linking from workload details
   const [labelSelector, setLabelSelector] = useState<string>(initialFilters.labelSelector)
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
@@ -814,6 +872,134 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const searchInputRef = useRef<HTMLInputElement>(null)
   // Ref to filter dropdown for click-outside closing
   const filterDropdownRef = useRef<HTMLDivElement>(null)
+  // Resize state
+  const resizingColumn = useRef<string | null>(null)
+  const resizeStartX = useRef(0)
+  const resizeStartWidth = useRef(0)
+  const [resizeLineX, setResizeLineX] = useState<number | null>(null)
+  const tableContainerRef = useRef<HTMLDivElement>(null)
+
+  // Fetch bulk metrics for table columns
+  const { data: topPodMetrics } = useTopPodMetrics()
+  const { data: topNodeMetrics } = useTopNodeMetrics()
+
+  const metricsLookup = useMemo<MetricsLookup>(() => {
+    const pods = new Map<string, TopPodMetrics>()
+    const nodes = new Map<string, TopNodeMetrics>()
+    if (topPodMetrics) {
+      for (const m of topPodMetrics) {
+        pods.set(`${m.namespace}/${m.name}`, m)
+      }
+    }
+    if (topNodeMetrics) {
+      for (const m of topNodeMetrics) {
+        nodes.set(m.name, m)
+      }
+    }
+    return { pods, nodes }
+  }, [topPodMetrics, topNodeMetrics])
+
+  // Load column settings from localStorage when kind changes
+  const allColumns = useMemo(() => getColumnsForKind(selectedKind.name), [selectedKind.name])
+
+  useEffect(() => {
+    const saved = loadColumnSettings(selectedKind.name)
+    if (saved) {
+      setVisibleColumns(new Set(saved.visible))
+      setColumnWidths(saved.widths || {})
+    } else {
+      setVisibleColumns(getDefaultVisibleColumns(allColumns))
+      setColumnWidths({})
+    }
+  }, [selectedKind.name, allColumns])
+
+  // Save column settings when they change (skip initial load)
+  const isColumnSettingsLoaded = useRef(false)
+  useEffect(() => {
+    if (visibleColumns.size === 0) return // not loaded yet
+    if (!isColumnSettingsLoaded.current) {
+      isColumnSettingsLoaded.current = true
+      return
+    }
+    saveColumnSettings(selectedKind.name, {
+      visible: Array.from(visibleColumns),
+      widths: columnWidths,
+    })
+  }, [visibleColumns, columnWidths, selectedKind.name])
+
+  // Close column picker on outside click
+  useEffect(() => {
+    if (!showColumnPicker) return
+    const handler = (e: MouseEvent) => {
+      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
+        setShowColumnPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showColumnPicker])
+
+  // Column resize handlers
+  const handleResizeStart = useCallback((e: React.MouseEvent, colKey: string, currentWidth: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    resizingColumn.current = colKey
+    resizeStartX.current = e.clientX
+    resizeStartWidth.current = currentWidth
+
+    // Show the resize line at the initial position
+    const container = tableContainerRef.current
+    const containerRect = container?.getBoundingClientRect()
+    if (containerRect) {
+      setResizeLineX(e.clientX - containerRect.left + (container?.scrollLeft ?? 0))
+    }
+
+    const handleMouseMove = (me: MouseEvent) => {
+      if (!resizingColumn.current) return
+      const diff = me.clientX - resizeStartX.current
+      const newWidth = Math.max(40, resizeStartWidth.current + diff)
+      setColumnWidths(prev => ({ ...prev, [resizingColumn.current!]: newWidth }))
+      // Update resize line position
+      if (containerRect) {
+        setResizeLineX(me.clientX - containerRect.left + (container?.scrollLeft ?? 0))
+      }
+    }
+
+    const handleMouseUp = () => {
+      resizingColumn.current = null
+      setResizeLineX(null)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }, [])
+
+  // Toggle column visibility
+  const toggleColumnVisibility = useCallback((colKey: string) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev)
+      if (next.has(colKey)) {
+        next.delete(colKey)
+      } else {
+        next.add(colKey)
+      }
+      return next
+    })
+  }, [])
+
+  // Reset column settings to defaults
+  const resetColumnSettings = useCallback(() => {
+    clearColumnSettings(selectedKind.name)
+    setVisibleColumns(getDefaultVisibleColumns(allColumns))
+    setColumnWidths({})
+    isColumnSettingsLoaded.current = false
+  }, [selectedKind.name, allColumns])
 
   // Keyboard shortcut: / or Cmd/Ctrl+K to focus search
   useEffect(() => {
@@ -1253,10 +1439,30 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         return resource.spec?.type || resource.type || ''
       case 'version':
         return status.nodeInfo?.kubeletVersion || ''
+      case 'cpu': {
+        if (kindLower === 'pods') {
+          const key = `${meta.namespace}/${meta.name}`
+          return metricsLookup.pods.get(key)?.cpu ?? 0
+        }
+        if (kindLower === 'nodes') {
+          return metricsLookup.nodes.get(meta.name)?.cpu ?? 0
+        }
+        return 0
+      }
+      case 'memory': {
+        if (kindLower === 'pods') {
+          const key = `${meta.namespace}/${meta.name}`
+          return metricsLookup.pods.get(key)?.memory ?? 0
+        }
+        if (kindLower === 'nodes') {
+          return metricsLookup.nodes.get(meta.name)?.memory ?? 0
+        }
+        return 0
+      }
       default:
         return ''
     }
-  }, [])
+  }, [metricsLookup])
 
   // Helper to check if a pod matches problem filters
   const podMatchesProblemFilter = useCallback((pod: any, filters: string[]): boolean => {
@@ -1564,7 +1770,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     })
   }
 
-  const columns = getColumnsForKind(selectedKind.name)
+  // Filter columns by visibility
+  const columns = useMemo(() => {
+    if (visibleColumns.size === 0) return allColumns.filter(c => c.defaultVisible !== false)
+    return allColumns.filter(c => visibleColumns.has(c.key))
+  }, [allColumns, visibleColumns])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -1995,6 +2205,54 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
               <span>Updated {formatAge(lastUpdated.toISOString())}</span>
             </div>
           )}
+          {/* Column picker */}
+          <div className="relative" ref={columnPickerRef}>
+            <button
+              onClick={() => setShowColumnPicker(prev => !prev)}
+              className={clsx(
+                'p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
+                showColumnPicker && 'bg-theme-elevated text-theme-text-primary'
+              )}
+              title="Configure columns"
+            >
+              <Columns3 className="w-4 h-4" />
+            </button>
+            {showColumnPicker && (
+              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] overflow-auto">
+                <div className="px-3 py-2 border-b border-theme-border flex items-center justify-between">
+                  <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
+                  <button
+                    onClick={resetColumnSettings}
+                    className="text-xs text-theme-text-tertiary hover:text-theme-text-primary flex items-center gap-1"
+                    title="Reset to defaults"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset
+                  </button>
+                </div>
+                {allColumns.map(col => (
+                  <label
+                    key={col.key}
+                    className="flex items-center gap-2 px-3 py-1.5 hover:bg-theme-elevated cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns.has(col.key)}
+                      onChange={() => toggleColumnVisibility(col.key)}
+                      disabled={col.key === 'name'}
+                      className="rounded border-theme-border"
+                    />
+                    <span className={clsx(
+                      'text-sm',
+                      col.key === 'name' ? 'text-theme-text-tertiary' : 'text-theme-text-primary'
+                    )}>
+                      {col.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={refetch}
             disabled={isRefreshAnimating}
@@ -2006,7 +2264,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         </div>
 
         {/* Table */}
-        <div className="flex-1 overflow-auto relative">
+        <div className="flex-1 overflow-auto relative" ref={tableContainerRef}>
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center text-theme-text-tertiary">
               Loading...
@@ -2024,33 +2282,45 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
             </div>
           ) : (
+            <MetricsContext.Provider value={metricsLookup}>
             <table className="w-full">
+              <colgroup>
+                {columns.map((col) => {
+                  const w = columnWidths[col.key]
+                  // Only apply pixel width if user has manually resized this column
+                  if (w) return <col key={col.key} style={{ width: w }} />
+                  // Otherwise let the browser auto-distribute using Tailwind hints
+                  return <col key={col.key} className={col.width} />
+                })}
+              </colgroup>
               <thead className="bg-theme-surface sticky top-0 z-10">
                 <tr>
                   {columns.map((col) => {
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object'].includes(col.key)
+                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
                     const isSorted = sortColumn === col.key
+                    const w = columnWidths[col.key]
                     return (
                       <th
                         key={col.key}
                         className={clsx(
-                          'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide',
-                          col.key !== 'name' && col.width,
+                          'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
+                          !w && col.key !== 'name' && col.width,
                           col.hideOnMobile && 'hidden xl:table-cell',
                           isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
+                        style={w ? { width: w } : undefined}
                         onClick={isSortable ? () => handleSort(col.key) : undefined}
                       >
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 overflow-hidden">
                           {col.tooltip ? (
                             <Tooltip content={col.tooltip}>
-                              <span className="border-b border-dotted border-theme-text-tertiary">{col.label}</span>
+                              <span className="border-b border-dotted border-theme-text-tertiary truncate">{col.label}</span>
                             </Tooltip>
                           ) : (
-                            <span>{col.label}</span>
+                            <span className="truncate">{col.label}</span>
                           )}
                           {isSortable && (
-                            <span className="text-theme-text-tertiary">
+                            <span className="text-theme-text-tertiary shrink-0">
                               {isSorted ? (
                                 sortDirection === 'asc' ? (
                                   <ChevronUp className="w-3.5 h-3.5" />
@@ -2063,6 +2333,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                             </span>
                           )}
                         </div>
+                        {/* Resize handle — invisible, only shows col-resize cursor on hover */}
+                        <div
+                          className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize"
+                          style={{ transform: 'translateX(50%)' , zIndex: 10 }}
+                          onMouseDown={(e) => {
+                            const th = e.currentTarget.parentElement!
+                            handleResizeStart(e, col.key, th.getBoundingClientRect().width)
+                          }}
+                        />
                       </th>
                     )
                   })}
@@ -2080,6 +2359,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                       resource={resource}
                       kind={selectedKind.name}
                       columns={columns}
+                      columnWidths={columnWidths}
                       isSelected={isSelected}
                       onClick={() => onResourceClick?.({ kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group })}
                     />
@@ -2087,6 +2367,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                 })}
               </tbody>
             </table>
+            {/* Resize indicator line — full table height, shown only while dragging */}
+            {resizeLineX !== null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none"
+                style={{ left: resizeLineX, zIndex: 20 }}
+              />
+            )}
+            </MetricsContext.Provider>
           )}
         </div>
       </div>
@@ -2146,12 +2434,13 @@ interface ResourceRowProps {
   resource: any
   kind: string
   columns: Column[]
+  columnWidths: Record<string, number>
   isSelected?: boolean
   onClick?: () => void
 }
 
 const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
-  function ResourceRow({ resource, kind, columns, isSelected, onClick }, ref) {
+  function ResourceRow({ resource, kind, columns, columnWidths, isSelected, onClick }, ref) {
     return (
       <tr
         ref={ref}
@@ -2163,18 +2452,22 @@ const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
             : 'hover:bg-theme-surface/50'
         )}
       >
-      {columns.map((col) => (
+      {columns.map((col) => {
+        const w = columnWidths[col.key]
+        return (
         <td
           key={col.key}
           className={clsx(
-            'px-4 py-3 overflow-hidden',
-            col.key !== 'name' && col.width,
+            'px-4 py-3 overflow-hidden truncate',
+            !w && col.key !== 'name' && col.width,
             col.hideOnMobile && 'hidden xl:table-cell'
           )}
+          style={w ? { width: w } : undefined}
         >
           <CellContent resource={resource} kind={kind} column={col.key} />
         </td>
-      ))}
+        )
+      })}
       </tr>
     )
   }
@@ -2395,6 +2688,7 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
 function PodCell({ resource, column }: { resource: any; column: string }) {
   const phase = resource.status?.phase
   const isCompleted = phase === 'Succeeded'
+  const metrics = useContext(MetricsContext)
 
   switch (column) {
     case 'ready': {
@@ -2450,6 +2744,24 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
           <span className="text-sm text-theme-text-secondary truncate block">{nodeName}</span>
         </Tooltip>
       )
+    }
+    case 'podIP': {
+      const ip = resource.status?.podIP || '-'
+      return <span className="text-sm text-theme-text-secondary font-mono">{ip}</span>
+    }
+    case 'cpu': {
+      const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
+      const m = metrics.pods.get(key)
+      if (!m || m.cpu === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const cores = m.cpu / 1e9
+      return <span className="text-sm text-theme-text-secondary font-mono">{cores.toFixed(3)}</span>
+    }
+    case 'memory': {
+      const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
+      const m = metrics.pods.get(key)
+      if (!m || m.memory === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const mib = m.memory / (1024 * 1024)
+      return <span className="text-sm text-theme-text-secondary font-mono">{mib.toFixed(2)}Mi</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -2846,6 +3158,8 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
 }
 
 function NodeCell({ resource, column }: { resource: any; column: string }) {
+  const metrics = useContext(MetricsContext)
+
   switch (column) {
     case 'status': {
       const status = getNodeStatus(resource)
@@ -2893,6 +3207,18 @@ function NodeCell({ resource, column }: { resource: any; column: string }) {
     case 'version': {
       const version = getNodeVersion(resource)
       return <span className="text-sm text-theme-text-secondary">{version}</span>
+    }
+    case 'cpu': {
+      const m = metrics.nodes.get(resource.metadata?.name)
+      if (!m || m.cpu === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const cores = m.cpu / 1e9
+      return <span className="text-sm text-theme-text-secondary font-mono">{cores.toFixed(3)}</span>
+    }
+    case 'memory': {
+      const m = metrics.nodes.get(resource.metadata?.name)
+      if (!m || m.memory === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const mib = m.memory / (1024 * 1024)
+      return <span className="text-sm text-theme-text-secondary font-mono">{mib.toFixed(2)}Mi</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

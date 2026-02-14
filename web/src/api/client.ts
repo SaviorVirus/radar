@@ -651,6 +651,40 @@ export function useNodeMetricsHistory(nodeName: string) {
   })
 }
 
+// Top metrics types (bulk, for resource table view)
+export interface TopPodMetrics {
+  namespace: string
+  name: string
+  cpu: number    // nanocores
+  memory: number // bytes
+}
+
+export interface TopNodeMetrics {
+  name: string
+  cpu: number    // nanocores
+  memory: number // bytes
+}
+
+// Fetch bulk metrics for all pods (for CPU/Memory columns in resource table)
+export function useTopPodMetrics() {
+  return useQuery<TopPodMetrics[]>({
+    queryKey: ['top-pod-metrics'],
+    queryFn: () => fetchJSON('/metrics/top/pods'),
+    staleTime: 25000,
+    refetchInterval: 30000,
+  })
+}
+
+// Fetch bulk metrics for all nodes (for CPU/Memory columns in resource table)
+export function useTopNodeMetrics() {
+  return useQuery<TopNodeMetrics[]>({
+    queryKey: ['top-node-metrics'],
+    queryFn: () => fetchJSON('/metrics/top/nodes'),
+    staleTime: 25000,
+    refetchInterval: 30000,
+  })
+}
+
 // ============================================================================
 // Pod Logs
 // ============================================================================

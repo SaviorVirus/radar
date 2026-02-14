@@ -373,6 +373,73 @@ func (s *MetricsHistoryStore) GetNodeMetricsHistory(name string) *NodeMetricsHis
 	}
 }
 
+// TopPodMetrics holds the latest metrics snapshot for a single pod
+type TopPodMetrics struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	CPU       int64  `json:"cpu"`    // nanocores
+	Memory    int64  `json:"memory"` // bytes
+}
+
+// TopNodeMetrics holds the latest metrics snapshot for a single node
+type TopNodeMetrics struct {
+	Name   string `json:"name"`
+	CPU    int64  `json:"cpu"`    // nanocores
+	Memory int64  `json:"memory"` // bytes
+}
+
+// GetAllPodMetricsLatest returns the latest metrics for all tracked pods
+func (s *MetricsHistoryStore) GetAllPodMetricsLatest() []TopPodMetrics {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]TopPodMetrics, 0, len(s.podMetrics))
+	for _, podBuf := range s.podMetrics {
+		var totalCPU, totalMem int64
+		for _, containerBuf := range podBuf.containers {
+			if points := containerBuf.GetAll(); len(points) > 0 {
+				last := points[len(points)-1]
+				totalCPU += last.CPU
+				totalMem += last.Memory
+			}
+		}
+		result = append(result, TopPodMetrics{
+			Namespace: podBuf.namespace,
+			Name:      podBuf.name,
+			CPU:       totalCPU,
+			Memory:    totalMem,
+		})
+	}
+	return result
+}
+
+// GetAllNodeMetricsLatest returns the latest metrics for all tracked nodes
+func (s *MetricsHistoryStore) GetAllNodeMetricsLatest() []TopNodeMetrics {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]TopNodeMetrics, 0, len(s.nodeMetrics))
+	for _, nodeBuf := range s.nodeMetrics {
+		if points := nodeBuf.buffer.GetAll(); len(points) > 0 {
+			last := points[len(points)-1]
+			result = append(result, TopNodeMetrics{
+				Name:   nodeBuf.name,
+				CPU:    last.CPU,
+				Memory: last.Memory,
+			})
+		}
+	}
+	return result
+}
+
 // parseCPU converts Kubernetes CPU string to nanocores
 // e.g., "100m" -> 100000000, "1" -> 1000000000, "250n" -> 250
 func parseCPU(s string) int64 {
