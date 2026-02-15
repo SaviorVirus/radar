@@ -2391,15 +2391,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                             </span>
                           )}
                         </div>
-                        {/* Resize handle — invisible, only shows col-resize cursor on hover */}
+                        {/* Resize handle with visible divider */}
                         <div
-                          className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize"
+                          className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center"
                           style={{ transform: 'translateX(50%)' , zIndex: 10 }}
                           onMouseDown={(e) => {
                             const th = e.currentTarget.parentElement!
                             handleResizeStart(e, col.key, th.getBoundingClientRect().width)
                           }}
-                        />
+                        >
+                          <div className="w-px h-4 bg-theme-border group-hover/th:bg-theme-text-disabled transition-colors" />
+                        </div>
                       </th>
                     )
                   })}
