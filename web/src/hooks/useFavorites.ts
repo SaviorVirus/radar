@@ -1,0 +1,52 @@
+import { useState, useCallback } from 'react'
+
+export interface PinnedKind {
+  name: string       // plural name for API calls, e.g. "pods", "deployments"
+  kind: string       // singular display name, e.g. "Pod", "Deployment"
+  group: string      // API group, e.g. "" for core, "source.toolkit.fluxcd.io" for Flux
+}
+
+const STORAGE_KEY = 'radar-pinned-kinds'
+
+function loadPinned(): PinnedKind[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {
+    // ignore parse errors
+  }
+  return []
+}
+
+function savePinned(pinned: PinnedKind[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(pinned))
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function matches(a: PinnedKind, name: string, group: string): boolean {
+  return a.name === name && a.group === group
+}
+
+export function usePinnedKinds() {
+  const [pinned, setPinned] = useState<PinnedKind[]>(loadPinned)
+
+  const togglePin = useCallback((item: PinnedKind) => {
+    setPinned((prev) => {
+      const exists = prev.some((p) => matches(p, item.name, item.group))
+      const next = exists
+        ? prev.filter((p) => !matches(p, item.name, item.group))
+        : [...prev, item]
+      savePinned(next)
+      return next
+    })
+  }, [])
+
+  const isPinned = useCallback((name: string, group: string): boolean => {
+    return pinned.some((p) => matches(p, name, group))
+  }, [pinned])
+
+  return { pinned, togglePin, isPinned }
+}

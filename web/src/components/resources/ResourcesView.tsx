@@ -19,6 +19,7 @@ import {
   Filter,
   X,
   GripVertical,
+  Pin,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
@@ -122,6 +123,7 @@ import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from 
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
 import { useCategoryOrder } from '../../hooks/useCategoryOrder'
+import { usePinnedKinds } from '../../hooks/useFavorites'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -804,6 +806,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { applyOrder, saveDragOrder } = useCategoryOrder()
   const [draggedCatIndex, setDraggedCatIndex] = useState<number | null>(null)
   const [dropTargetCatIndex, setDropTargetCatIndex] = useState<number | null>(null)
+
+  // Pinned kinds (favorites)
+  const { pinned, togglePin, isPinned } = usePinnedKinds()
+  const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
 
   console.debug('[filters] ResourcesView render:', { kind: selectedKind.name, columnFilters, searchTerm, url: location.search })
 
@@ -1719,6 +1725,56 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
           </div>
         </div>
         <nav className="p-2">
+          {/* Favorites (pinned kinds) section — always visible */}
+          <div className="mb-2">
+            <button
+              onClick={() => setFavoritesExpanded((v) => !v)}
+              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
+            >
+              {favoritesExpanded ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+              <span className="flex-1 text-left">Favorites</span>
+              {!favoritesExpanded && pinned.length > 0 && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case">
+                  {pinned.length}
+                </span>
+              )}
+            </button>
+            {favoritesExpanded && (
+              <div className="space-y-0.5">
+                {pinned.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-theme-text-disabled">
+                    No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
+                  </div>
+                ) : (
+                  pinned.map((p) => {
+                    const isResourceSelected =
+                      (selectedKind.name === p.name && selectedKind.group === p.group) ||
+                      (selectedKind.kind.toLowerCase() === p.kind.toLowerCase() && selectedKind.group === p.group)
+                    return (
+                      <ResourceTypeButton
+                        key={`${p.name}-${p.group}`}
+                        ref={isResourceSelected ? selectedSidebarRef : null}
+                        resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
+                        count={counts?.[p.kind] ?? 0}
+                        isSelected={isResourceSelected}
+                        isForbidden={forbiddenKinds.has(p.kind)}
+                        isPinned={true}
+                        onTogglePin={() => togglePin(p)}
+                        onClick={() => {
+                          setSelectedKind({ name: p.name, kind: p.kind, group: p.group })
+                          onKindChange?.()
+                        }}
+                      />
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
           {filteredCategories ? (
             // Dynamic categories from API (with drag-and-drop reordering)
             filteredCategories.map((category, catIndex) => {
@@ -1802,6 +1858,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                           count={counts?.[resource.kind] ?? 0}
                           isSelected={isResourceSelected}
                           isForbidden={forbiddenKinds.has(resource.kind)}
+                          isPinned={isPinned(resource.name, resource.group)}
+                          onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
                           onClick={() => {
                             setSelectedKind({ name: resource.name, kind: resource.kind, group: resource.group })
                             onKindChange?.()
@@ -2160,18 +2218,20 @@ interface ResourceTypeButtonProps {
   count: number
   isSelected: boolean
   isForbidden?: boolean
+  isPinned?: boolean
+  onTogglePin?: () => void
   onClick: () => void
 }
 
 const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps>(
-  function ResourceTypeButton({ resource, count, isSelected, isForbidden: forbidden, onClick }, ref) {
+  function ResourceTypeButton({ resource, count, isSelected, isForbidden: forbidden, isPinned, onTogglePin, onClick }, ref) {
     const Icon = getResourceIcon(resource.kind)
     return (
       <button
         ref={ref}
         onClick={onClick}
         className={clsx(
-          'w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors',
+          'w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors group/kind',
           isSelected
             ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
             : forbidden
@@ -2195,6 +2255,24 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
             isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated'
           )}>
             {count}
+          </span>
+        )}
+        {onTogglePin && (
+          <span
+            role="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onTogglePin()
+            }}
+            className={clsx(
+              'ml-auto p-0.5 rounded transition-all shrink-0 hover:bg-theme-hover',
+              isPinned
+                ? 'text-theme-text-secondary'
+                : 'opacity-0 group-hover/kind:opacity-100 text-theme-text-disabled'
+            )}
+            title={isPinned ? 'Unpin from favorites' : 'Pin to favorites'}
+          >
+            <Pin className={clsx('w-3.5 h-3.5', isPinned && 'fill-current')} />
           </span>
         )}
       </button>
