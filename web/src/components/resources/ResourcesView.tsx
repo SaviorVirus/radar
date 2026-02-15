@@ -18,7 +18,7 @@ import {
   Clock,
   Filter,
   X,
-  Bookmark,
+  Pin,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
@@ -802,7 +802,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Pinned kinds (favorites)
   const { pinned, togglePin, isPinned } = usePinnedKinds()
-  const [favoritesExpanded, setFavoritesExpanded] = useState(false)
+  const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
 
   console.debug('[filters] ResourcesView render:', { kind: selectedKind.name, columnFilters, searchTerm, url: location.search })
 
@@ -1734,7 +1734,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
               <div className="space-y-0.5">
                 {pinned.length === 0 ? (
                   <div className="px-3 py-2 text-xs text-theme-text-disabled">
-                    No pinned resources. Click <Bookmark className="w-3 h-3 inline" /> on any resource type to pin it here.
+                    No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
                   </div>
                 ) : (
                   pinned.map((p) => {
@@ -2212,7 +2212,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
             )}
             title={isPinned ? 'Unpin from favorites' : 'Pin to favorites'}
           >
-            <Bookmark className={clsx('w-3.5 h-3.5', isPinned && 'fill-current')} />
+            <Pin className={clsx('w-3.5 h-3.5', isPinned && 'fill-current')} />
           </span>
         )}
       </button>
