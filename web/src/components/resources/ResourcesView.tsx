@@ -18,6 +18,7 @@ import {
   Clock,
   Filter,
   X,
+  GripVertical,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
@@ -120,6 +121,7 @@ import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, Kustomization
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
+import { useCategoryOrder } from '../../hooks/useCategoryOrder'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -797,6 +799,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [labelSelector, setLabelSelector] = useState<string>(initialFilters.labelSelector)
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
+
+  // Category drag-and-drop reordering
+  const { applyOrder, saveDragOrder } = useCategoryOrder()
+  const [draggedCatIndex, setDraggedCatIndex] = useState<number | null>(null)
+  const [dropTargetCatIndex, setDropTargetCatIndex] = useState<number | null>(null)
 
   console.debug('[filters] ResourcesView render:', { kind: selectedKind.name, columnFilters, searchTerm, url: location.search })
 
@@ -1526,11 +1533,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return { sortedCategories: visibleCategories, hiddenKindsCount: totalHiddenKinds, hiddenGroupsCount: totalHiddenGroups }
   }, [categories, counts, showEmptyKinds])
 
+  // Apply user's custom category order
+  const orderedCategories = useMemo(() => {
+    if (!sortedCategories) return null
+    return applyOrder(sortedCategories)
+  }, [sortedCategories, applyOrder])
+
   // Filter sidebar categories/kinds by the kind search term
   const filteredCategories = useMemo(() => {
-    if (!sortedCategories || !kindFilter.trim()) return sortedCategories
+    if (!orderedCategories || !kindFilter.trim()) return orderedCategories
     const term = kindFilter.toLowerCase()
-    return sortedCategories
+    return orderedCategories
       .map(category => {
         const matchingResources = category.visibleResources.filter((resource: any) =>
           resource.kind.toLowerCase().includes(term) ||
@@ -1543,7 +1556,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         }
       })
       .filter(Boolean) as typeof sortedCategories
-  }, [sortedCategories, kindFilter])
+  }, [orderedCategories, kindFilter])
 
   // Auto-expand all categories when filtering
   const isKindFiltering = kindFilter.trim().length > 0
@@ -1707,15 +1720,62 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         </div>
         <nav className="p-2">
           {filteredCategories ? (
-            // Dynamic categories from API
-            filteredCategories.map((category) => {
+            // Dynamic categories from API (with drag-and-drop reordering)
+            filteredCategories.map((category, catIndex) => {
               const isExpanded = effectiveExpandedCategories.has(category.name)
+              const isDragging = draggedCatIndex === catIndex
+              const isDropTarget = dropTargetCatIndex === catIndex && draggedCatIndex !== catIndex
+              const canDrag = !isKindFiltering // disable drag when filtering
               return (
-                <div key={category.name} className="mb-2">
+                <div
+                  key={category.name}
+                  className={clsx(
+                    'mb-2 rounded-lg transition-all',
+                    isDragging && 'opacity-40',
+                    isDropTarget && 'ring-1 ring-blue-500/50'
+                  )}
+                  draggable={canDrag}
+                  onDragStart={(e) => {
+                    if (!canDrag) return
+                    setDraggedCatIndex(catIndex)
+                    e.dataTransfer.effectAllowed = 'move'
+                    // Use a minimal drag image
+                    const el = e.currentTarget
+                    e.dataTransfer.setDragImage(el, 20, 20)
+                  }}
+                  onDragOver={(e) => {
+                    if (draggedCatIndex === null || !canDrag) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (dropTargetCatIndex !== catIndex) {
+                      setDropTargetCatIndex(catIndex)
+                    }
+                  }}
+                  onDragLeave={() => {
+                    if (dropTargetCatIndex === catIndex) {
+                      setDropTargetCatIndex(null)
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    if (draggedCatIndex !== null && filteredCategories) {
+                      saveDragOrder(filteredCategories, draggedCatIndex, catIndex)
+                    }
+                    setDraggedCatIndex(null)
+                    setDropTargetCatIndex(null)
+                  }}
+                  onDragEnd={() => {
+                    setDraggedCatIndex(null)
+                    setDropTargetCatIndex(null)
+                  }}
+                >
                   <button
                     onClick={() => toggleCategory(category.name)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide group/cat"
                   >
+                    {canDrag && (
+                      <GripVertical className="w-3 h-3 opacity-0 group-hover/cat:opacity-50 cursor-grab shrink-0" />
+                    )}
                     {isExpanded ? (
                       <ChevronDown className="w-3 h-3" />
                     ) : (
