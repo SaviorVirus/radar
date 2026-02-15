@@ -15,6 +15,8 @@ import {
   Save,
   XCircle,
   AlertTriangle,
+  Box,
+  ChevronDown,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
@@ -503,14 +505,26 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
     }
   }
 
-  const handleOpenLogs = () => {
+  const handleOpenLogs = (containerName?: string) => {
     if (resource.namespace && resource.name && containers.length > 0) {
       openLogs({
         namespace: resource.namespace,
         podName: resource.name,
         containers,
+        containerName,
       })
     }
+  }
+
+  const [showLogsMenu, setShowLogsMenu] = useState(false)
+  const logsMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleLogsMouseEnter = () => {
+    if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
+    if (containers.length > 1) setShowLogsMenu(true)
+  }
+  const handleLogsMouseLeave = () => {
+    logsMenuTimeout.current = setTimeout(() => setShowLogsMenu(false), 150)
   }
 
   return (
@@ -528,13 +542,37 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
             </button>
           )}
           {canViewLogs && (
-            <button
-              onClick={handleOpenLogs}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+            <div
+              className="relative"
+              onMouseEnter={handleLogsMouseEnter}
+              onMouseLeave={handleLogsMouseLeave}
             >
-              <FileText className="w-3.5 h-3.5" />
-              Logs
-            </button>
+              <button
+                onClick={() => handleOpenLogs(containers.length === 1 ? containers[0] : undefined)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                Logs
+                {containers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
+              </button>
+              {showLogsMenu && containers.length > 1 && (
+                <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
+                  {containers.map((container: string) => (
+                    <button
+                      key={container}
+                      onClick={() => {
+                        handleOpenLogs(container)
+                        setShowLogsMenu(false)
+                      }}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"
+                    >
+                      <Box className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+                      <span className="truncate">{container}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {isRunning && canPortForward && resource.namespace && resource.name && (
             <PortForwardButton
