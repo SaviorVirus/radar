@@ -785,7 +785,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(getInitialKindFromURL)
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['Workloads', 'Networking', 'Configuration']))
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('radar-expanded-categories')
+      if (saved) return new Set(JSON.parse(saved) as string[])
+    } catch { /* ignore */ }
+    return new Set(['Workloads', 'Networking', 'Configuration'])
+  })
   const [showEmptyKinds, setShowEmptyKinds] = useState(false)
   const [kindFilter, setKindFilter] = useState('')
   const [sortColumn, setSortColumn] = useState<string | null>(null)
@@ -1579,6 +1585,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       } else {
         next.add(categoryName)
       }
+      try { localStorage.setItem('radar-expanded-categories', JSON.stringify([...next])) } catch { /* ignore */ }
       return next
     })
   }
