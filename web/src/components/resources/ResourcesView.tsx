@@ -203,6 +203,21 @@ interface Column {
   minWidth?: number // minimum width in px
 }
 
+// Tailwind width class → pixel minimum mapping for CSS Grid column sizing
+const TAILWIND_WIDTH_TO_PX: Record<string, number> = {
+  'w-12': 48, 'w-14': 56, 'w-16': 64, 'w-20': 80, 'w-24': 96,
+  'w-28': 112, 'w-32': 128, 'w-36': 144, 'w-40': 160, 'w-44': 176,
+  'w-48': 192, 'w-56': 224, 'w-64': 256,
+}
+
+function getColumnMinWidth(col: Column): number {
+  if (col.minWidth) return col.minWidth
+  if (!col.width) return 200 // Name column (no width class) gets wider minimum
+  const match = col.width.match(/(?:min-)?w-(\d+)/)
+  if (match) return TAILWIND_WIDTH_TO_PX[`w-${match[1]}`] || 80
+  return 80
+}
+
 // Default columns for unknown resource types (CRDs)
 const DEFAULT_COLUMNS: Column[] = [
   { key: 'name', label: 'Name' },
@@ -945,6 +960,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return () => document.removeEventListener('mousedown', handler)
   }, [showColumnPicker])
 
+  // Whether any columns have been resized (triggers switch to fixed grid sizes + spacer)
+  const hasResizedColumns = Object.keys(columnWidths).length > 0
+
   // Column resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent, colKey: string, currentWidth: number) => {
     e.preventDefault()
@@ -953,8 +971,25 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     resizeStartX.current = e.clientX
     resizeStartWidth.current = currentWidth
 
-    // Show the resize line at the initial position
+    // On first resize, snapshot all column widths from the DOM to switch to fixed grid sizes
     const container = tableContainerRef.current
+    setColumnWidths(prev => {
+      const hasWidths = Object.keys(prev).length > 0
+      if (hasWidths) return prev
+      // Snapshot all visible <th> widths
+      const ths = container?.querySelectorAll('thead th')
+      if (!ths) return prev
+      const snapped: Record<string, number> = {}
+      const cols = allColumns.filter(c => visibleColumns.has(c.key))
+      ths.forEach((th, i) => {
+        if (cols[i]) {
+          snapped[cols[i].key] = th.getBoundingClientRect().width
+        }
+      })
+      return snapped
+    })
+
+    // Show the resize line at the initial position
     const containerRect = container?.getBoundingClientRect()
     if (containerRect) {
       setResizeLineX(e.clientX - containerRect.left + (container?.scrollLeft ?? 0))
@@ -963,11 +998,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const handleMouseMove = (me: MouseEvent) => {
       if (!resizingColumn.current) return
       const diff = me.clientX - resizeStartX.current
-      const newWidth = Math.max(40, resizeStartWidth.current + diff)
+
+      // Allow shrinking to a small minimum — content truncates with ellipsis
+      const minW = 48
+
+      const newWidth = Math.max(minW, resizeStartWidth.current + diff)
       setColumnWidths(prev => ({ ...prev, [resizingColumn.current!]: newWidth }))
-      // Update resize line position
-      if (containerRect) {
-        setResizeLineX(me.clientX - containerRect.left + (container?.scrollLeft ?? 0))
+      // Update resize line position, clamped to the constrained width
+      const rect = container?.getBoundingClientRect()
+      if (rect) {
+        const clampedClientX = resizeStartX.current + (newWidth - resizeStartWidth.current)
+        setResizeLineX(clampedClientX - rect.left + (container?.scrollLeft ?? 0))
       }
     }
 
@@ -978,13 +1019,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      // Suppress the click event that fires after mouseup to prevent accidental sort toggle
+      document.addEventListener('click', (e) => e.stopPropagation(), { capture: true, once: true })
     }
 
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [])
+  }, [allColumns, visibleColumns])
 
   // Toggle column visibility
   const toggleColumnVisibility = useCallback((colKey: string) => {
@@ -1782,6 +1825,25 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return allColumns.filter(c => visibleColumns.has(c.key))
   }, [allColumns, visibleColumns])
 
+  // CSS Grid template for column sizing
+  const gridTemplateColumns = useMemo(() => {
+    if (hasResizedColumns) {
+      // After resize: fixed pixel widths + spacer column absorbs remaining space
+      const colWidths = columns.map(col => {
+        const w = columnWidths[col.key]
+        if (w) return `${w}px`
+        return `minmax(${getColumnMinWidth(col)}px, 1fr)`
+      }).join(' ')
+      return `${colWidths} minmax(0, 1fr)`
+    }
+    // Before resize: auto-distribute with minimums (like auto table layout)
+    return columns.map(col => {
+      const min = getColumnMinWidth(col)
+      const fr = col.key === 'name' ? '2fr' : '1fr'
+      return `minmax(${min}px, ${fr})`
+    }).join(' ')
+  }, [columns, columnWidths, hasResizedColumns])
+
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
     if (!resources || resources.length === 0) return null
@@ -2341,32 +2403,22 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
             </div>
           ) : (
             <MetricsContext.Provider value={metricsLookup}>
-            <table className="w-full">
-              <colgroup>
-                {columns.map((col) => {
-                  const w = columnWidths[col.key]
-                  // Only apply pixel width if user has manually resized this column
-                  if (w) return <col key={col.key} style={{ width: w }} />
-                  // Otherwise let the browser auto-distribute using Tailwind hints
-                  return <col key={col.key} className={col.width} />
-                })}
-              </colgroup>
-              <thead className="bg-theme-surface sticky top-0 z-10">
-                <tr>
-                  {columns.map((col) => {
+            <table className="w-full" style={{ display: 'grid', gridTemplateColumns }}>
+              <thead style={{ display: 'contents' }}>
+                <tr style={{ display: 'contents' }}>
+                  {columns.map((col, colIdx) => {
                     const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
                     const isSorted = sortColumn === col.key
-                    const w = columnWidths[col.key]
+                    const isLastCol = colIdx === columns.length - 1
                     return (
                       <th
                         key={col.key}
                         className={clsx(
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
-                          !w && col.key !== 'name' && col.width,
-                          col.hideOnMobile && 'hidden xl:table-cell',
+                          'sticky top-0 z-10 bg-theme-surface border-b border-theme-border',
+                          !isLastCol && 'border-r-subtle',
                           isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
-                        style={w ? { width: w } : undefined}
                         onClick={isSortable ? () => handleSort(col.key) : undefined}
                       >
                         <div className="flex items-center gap-1 overflow-hidden">
@@ -2405,9 +2457,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                       </th>
                     )
                   })}
+                  {hasResizedColumns && <th className="sticky top-0 z-10 bg-theme-surface border-b border-theme-border p-0" />}
                 </tr>
               </thead>
-              <tbody className="table-divide-subtle">
+              <tbody style={{ display: 'contents' }}>
                 {filteredResources.map((resource: any) => {
                   const isSelected = selectedResource?.kind === selectedKind.name &&
                     selectedResource?.namespace === resource.metadata?.namespace &&
@@ -2419,7 +2472,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                       resource={resource}
                       kind={selectedKind.name}
                       columns={columns}
-                      columnWidths={columnWidths}
+                      hasSpacerColumn={hasResizedColumns}
                       isSelected={isSelected}
                       onClick={() => onResourceClick?.({ kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group })}
                     />
@@ -2514,40 +2567,33 @@ interface ResourceRowProps {
   resource: any
   kind: string
   columns: Column[]
-  columnWidths: Record<string, number>
+  hasSpacerColumn: boolean
   isSelected?: boolean
   onClick?: () => void
 }
 
 const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
-  function ResourceRow({ resource, kind, columns, columnWidths, isSelected, onClick }, ref) {
+  function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, onClick }, ref) {
     return (
       <tr
         ref={ref}
         onClick={onClick}
-        className={clsx(
-          'cursor-pointer transition-colors',
-          isSelected
-            ? 'bg-blue-500/20 hover:bg-blue-500/30'
-            : 'hover:bg-theme-surface/50'
-        )}
+        className="group/row contents"
       >
-      {columns.map((col) => {
-        const w = columnWidths[col.key]
-        return (
+      {columns.map((col) => (
         <td
           key={col.key}
           className={clsx(
-            'px-4 py-3 overflow-hidden truncate',
-            !w && col.key !== 'name' && col.width,
-            col.hideOnMobile && 'hidden xl:table-cell'
+            'px-4 py-3 overflow-hidden truncate border-b-subtle cursor-pointer transition-colors',
+            isSelected
+              ? 'bg-blue-500/20 group-hover/row:bg-blue-500/30'
+              : 'group-hover/row:bg-theme-surface/50'
           )}
-          style={w ? { width: w } : undefined}
         >
           <CellContent resource={resource} kind={kind} column={col.key} />
         </td>
-        )
-      })}
+      ))}
+      {hasSpacerColumn && <td className="border-b-subtle p-0" />}
       </tr>
     )
   }

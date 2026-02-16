@@ -210,6 +210,16 @@ body {
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+/* Subtle right border (column dividers in header) */
+[data-theme="dark"] .border-r-subtle {
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+[data-theme="light"] .border-r-subtle,
+:root:not([data-theme]) .border-r-subtle {
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+}
+
 /* Subtle top border */
 [data-theme="dark"] .border-t-subtle {
   border-top: 1px solid rgba(255, 255, 255, 0.07);
