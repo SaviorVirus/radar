@@ -110,6 +110,13 @@ func dropManagedFields(obj any) (any, error) {
 func InitResourceCache() error {
 	var initErr error
 	cacheOnce.Do(func() {
+		// Hold cacheMu for the entire init so that ResetResourceCache (which also
+		// acquires cacheMu) blocks until we finish. Without this, a concurrent
+		// context switch can zero cacheOnce while doSlow still holds its internal
+		// mutex, causing "sync: unlock of unlocked mutex".
+		cacheMu.Lock()
+		defer cacheMu.Unlock()
+
 		if k8sClient == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
