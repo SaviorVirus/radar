@@ -15,7 +15,7 @@ window.addEventListener('click', (e: MouseEvent) => {
   const anchor = (e.target as HTMLElement).closest?.('a[href]') as HTMLAnchorElement | null
   if (!anchor) return
   const href = anchor.href
-  if (!href || href.startsWith(window.location.origin) || href.startsWith('/') || href.startsWith('#')) return
+  if (!href || href.startsWith(window.location.origin) || href.startsWith('/') || href.startsWith('#') || href.startsWith('blob:')) return
   // External URL — open via system browser
   e.preventDefault()
   openExternal(href)

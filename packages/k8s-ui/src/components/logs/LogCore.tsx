@@ -262,7 +262,7 @@ export function LogCore({
         </Tooltip>
 
         {/* Download */}
-        <div className="relative" ref={downloadMenuRef}>
+        <div className="relative flex items-center" ref={downloadMenuRef}>
           <Tooltip content="Download logs" delay={TIP_DELAY} position="bottom">
             <button
               onClick={() => setShowDownloadMenu(prev => !prev)}

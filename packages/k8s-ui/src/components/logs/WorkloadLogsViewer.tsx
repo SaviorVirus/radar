@@ -8,6 +8,7 @@ import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
 import type { DownloadFormat } from './LogCore'
 import type { WorkloadPodInfo } from '../../types'
+import { useToast } from '../ui/Toast'
 
 export interface WorkloadRawLog {
   pod: string
@@ -56,6 +57,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream }: WorkloadLog
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
   const [logRange, setLogRange] = useState('100')
+  const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
@@ -159,6 +161,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream }: WorkloadLog
   const downloadLogs = useCallback((format: DownloadFormat) => {
     let content: string
     let mime: string
+    const filename = `${name}-logs.${format}`
     switch (format) {
       case 'json':
         content = JSON.stringify(filteredEntries.map(l => ({
@@ -176,8 +179,13 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream }: WorkloadLog
         content = filteredEntries.map(l => `${l.timestamp} [${l.pod}/${l.container}] ${l.content}`).join('\n')
         mime = 'text/plain'
     }
-    triggerDownload(content, mime, `${name}-logs.${format}`)
-  }, [filteredEntries, name])
+    try {
+      triggerDownload(content, mime, filename)
+      showSuccess('Log download started', `Saving ${filename}. Check your browser or desktop Downloads location.`)
+    } catch (err) {
+      showError('Failed to download logs', err instanceof Error ? err.message : 'Unknown download error')
+    }
+  }, [filteredEntries, name, showError, showSuccess])
 
   const toolbarExtra = (
     <>

@@ -7,6 +7,7 @@ import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
 import type { DownloadFormat } from './LogCore'
 import { Tooltip } from '../ui/Tooltip'
+import { useToast } from '../ui/Toast'
 
 export interface LogsFetchParams {
   container: string
@@ -39,6 +40,7 @@ export function LogsViewer({
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [logRange, setLogRange] = useState('500')
   const [showPrevious, setShowPrevious] = useState(false)
+  const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
@@ -83,6 +85,7 @@ export function LogsViewer({
   const downloadLogs = useCallback((format: DownloadFormat) => {
     let content: string
     let mime: string
+    const filename = `${podName}-${selectedContainer}-logs.${format}`
     switch (format) {
       case 'json':
         content = JSON.stringify(entries.map(l => ({ timestamp: l.timestamp, content: l.content, container: l.container })), null, 2)
@@ -98,8 +101,13 @@ export function LogsViewer({
         content = entries.map(l => `${l.timestamp} ${l.content}`).join('\n')
         mime = 'text/plain'
     }
-    triggerDownload(content, mime, `${podName}-${selectedContainer}-logs.${format}`)
-  }, [entries, podName, selectedContainer])
+    try {
+      triggerDownload(content, mime, filename)
+      showSuccess('Log download started', `Saving ${filename}. Check your browser or desktop Downloads location.`)
+    } catch (err) {
+      showError('Failed to download logs', err instanceof Error ? err.message : 'Unknown download error')
+    }
+  }, [entries, podName, selectedContainer, showError, showSuccess])
 
   const toolbarExtra = (
     <>
