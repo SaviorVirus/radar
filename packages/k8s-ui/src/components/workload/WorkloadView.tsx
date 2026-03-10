@@ -125,10 +125,10 @@ interface WorkloadViewProps {
   // ── ResourceActionsBar props (passed through) ────────────────────────────
   /** All props for the actions bar (forwarded as-is) */
   actionsBarProps?: Record<string, any>
-
-  // ── Renderer overrides ──────────────────────────────────────────────────
   /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
   rendererOverrides?: RendererOverrides
+  /** Resolved ConfigMap/Secret data for envFrom expansion in PodRenderer */
+  resolvedEnvFrom?: ResolvedEnvFrom
 }
 
 export function WorkloadView({
@@ -170,6 +170,8 @@ export function WorkloadView({
   actionsBarProps,
   // Renderer overrides
   rendererOverrides,
+  // Pod env expansion
+  resolvedEnvFrom,
 }: WorkloadViewProps) {
   // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
   const kind = pluralToKind(kindProp)
@@ -441,6 +443,7 @@ export function WorkloadView({
               onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
               rendererOverrides={rendererOverrides}
+              resolvedEnvFrom={resolvedEnvFrom}
             />
           )}
         </div>
@@ -580,6 +583,7 @@ export function WorkloadView({
             onOpenLogs={handleOpenLogs}
             onSwitchToTimeline={() => handleSetTab('timeline')}
             rendererOverrides={rendererOverrides}
+            resolvedEnvFrom={resolvedEnvFrom}
           />
         )}
         {activeTab === 'timeline' && (
@@ -1062,6 +1066,7 @@ function InfoTab({
   onOpenLogs,
   onSwitchToTimeline,
   rendererOverrides,
+  resolvedEnvFrom,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1075,6 +1080,7 @@ function InfoTab({
   onOpenLogs?: (podName: string, containerName: string) => void
   onSwitchToTimeline?: () => void
   rendererOverrides?: RendererOverrides
+  resolvedEnvFrom?: ResolvedEnvFrom
 }) {
   if (isLoading) {
     return (
@@ -1108,6 +1114,7 @@ function InfoTab({
         showMetrics={false}
         onOpenLogs={onOpenLogs}
         rendererOverrides={rendererOverrides}
+        resolvedEnvFrom={resolvedEnvFrom}
         eventsHint={onSwitchToTimeline && (
           <button
             onClick={onSwitchToTimeline}

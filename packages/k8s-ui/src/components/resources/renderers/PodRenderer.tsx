@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatResources, formatDuration } from '../resource-utils'
@@ -68,6 +68,12 @@ interface PodRendererProps {
   // Filesystem browser render props
   renderImageBrowser?: (props: { image: string; namespace: string; podName: string; pullSecrets: string[]; onClose: () => void; onSwitchToPodFiles?: () => void }) => ReactNode
   renderPodBrowser?: (props: { namespace: string; podName: string; containers: string[]; initialContainer: string; onClose: () => void; onSwitchToImageFiles: () => void }) => ReactNode
+  /**
+   * Resolved content for envFrom references.
+   * Map of resource name → { keys: string[], values: Record<string,string>, isSecret: boolean }
+   * When provided, expands ConfigMap/Secret keys inline instead of showing "(all keys)".
+   */
+  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
 }
 
 // Extract problems from pod status and conditions
@@ -134,6 +140,161 @@ function getPodProblems(data: any): string[] {
   return problems
 }
 
+// ── Env vars section — extracted to use hooks (useState for reveal) ──────────
+
+function SecretValueCell({ value }: { value: string }) {
+  const [revealed, setRevealed] = useState(false)
+  return (
+    <span className="flex items-center gap-1 min-w-0">
+      <span className={clsx('break-all text-yellow-400/80', !revealed && 'blur-[3px] select-none')}>
+        {value || '•••'}
+      </span>
+      <button
+        onClick={() => setRevealed(r => !r)}
+        className="shrink-0 text-theme-text-tertiary hover:text-yellow-400 transition-colors"
+        title={revealed ? 'Hide value' : 'Reveal value'}
+      >
+        {revealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+      </button>
+    </span>
+  )
+}
+
+function EnvRow({ name, value, isSecret }: { name: string; value: string; isSecret: boolean }) {
+  return (
+    <div className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+      <span className="text-theme-text-secondary shrink-0 break-all">{name}</span>
+      <span className="text-theme-text-tertiary shrink-0">=</span>
+      {isSecret
+        ? <SecretValueCell value={value} />
+        : <span className="text-theme-text-primary break-all min-w-0">{value}</span>
+      }
+    </div>
+  )
+}
+
+function EnvVarsSection({
+  initContainers,
+  containers,
+  resolvedEnvFrom,
+}: {
+  initContainers: any[]
+  containers: any[]
+  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
+}) {
+  const allContainers = [...initContainers, ...containers]
+  const multiContainer = allContainers.filter((c: any) => c.env?.length > 0 || c.envFrom?.length > 0).length > 1
+
+  return (
+    <Section title="Environment Variables" icon={List}>
+      <div className="space-y-4">
+        {allContainers.map((container: any) => {
+          const envVars: any[] = container.env || []
+          const envFrom: any[] = container.envFrom || []
+          if (!envVars.length && !envFrom.length) return null
+          return (
+            <div key={container.name}>
+              {/* Only show container name label when there are multiple containers with env vars */}
+              {multiContainer && (
+                <div className="text-xs font-medium text-theme-text-tertiary mb-2 uppercase tracking-wide">
+                  {container.name}
+                </div>
+              )}
+              <div className="space-y-1">
+                {/* envFrom — ConfigMap / Secret bulk injections */}
+                {envFrom.map((ef: any, i: number) => {
+                  const isSecret = !!ef.secretRef
+                  const sourceName = ef.configMapRef?.name ?? ef.secretRef?.name ?? 'unknown'
+                  const prefix = ef.configMapRef ? 'ConfigMap' : ef.secretRef ? 'Secret' : 'Source'
+                  const resolved = resolvedEnvFrom?.[sourceName]
+                  return (
+                    <div key={i} className="mb-1">
+                      <div className="flex items-center gap-1.5 text-xs font-mono py-0.5">
+                        <span className={clsx(
+                          'shrink-0 px-1 py-0.5 rounded text-[10px]',
+                          isSecret ? 'bg-yellow-500/10 text-yellow-400' : 'bg-blue-500/10 text-blue-400'
+                        )}>
+                          {prefix}
+                        </span>
+                        <span className="text-theme-text-secondary">{sourceName}</span>
+                        {!resolved && <span className="text-theme-text-tertiary">(all keys)</span>}
+                      </div>
+                      {resolved && resolved.keys.length > 0 && (
+                        <div className="ml-2 mt-0.5">
+                          {resolved.keys.map((key) => (
+                            <EnvRow
+                              key={key}
+                              name={key}
+                              value={resolved.values[key] ?? ''}
+                              isSecret={isSecret}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {/* Individual env vars */}
+                {envVars.map((env: any) => {
+                  if (env.valueFrom?.secretKeyRef) {
+                    return (
+                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+                        <span className="text-theme-text-tertiary shrink-0">=</span>
+                        <span className="text-yellow-400/60 text-[10px] shrink-0 self-center px-1 py-0.5 bg-yellow-500/10 rounded">
+                          secret:{env.valueFrom.secretKeyRef.name}[{env.valueFrom.secretKeyRef.key}]
+                        </span>
+                      </div>
+                    )
+                  }
+                  if (env.valueFrom?.configMapKeyRef) {
+                    return (
+                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+                        <span className="text-theme-text-tertiary shrink-0">=</span>
+                        <span className="text-blue-400/70 text-[10px] shrink-0 self-center px-1 py-0.5 bg-blue-500/10 rounded">
+                          configmap:{env.valueFrom.configMapKeyRef.name}[{env.valueFrom.configMapKeyRef.key}]
+                        </span>
+                      </div>
+                    )
+                  }
+                  if (env.valueFrom?.fieldRef) {
+                    return (
+                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+                        <span className="text-theme-text-tertiary shrink-0">=</span>
+                        <span className="text-purple-400/70 break-all">field:{env.valueFrom.fieldRef.fieldPath}</span>
+                      </div>
+                    )
+                  }
+                  if (env.valueFrom?.resourceFieldRef) {
+                    return (
+                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+                        <span className="text-theme-text-tertiary shrink-0">=</span>
+                        <span className="text-purple-400/70 break-all">resource:{env.valueFrom.resourceFieldRef.resource}</span>
+                      </div>
+                    )
+                  }
+                  // Plain value
+                  return (
+                    <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+                      <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+                      <span className="text-theme-text-tertiary shrink-0">=</span>
+                      <span className="text-theme-text-primary break-all min-w-0">{env.value ?? ''}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Section>
+  )
+}
+
 export function PodRenderer({
   data,
   onCopy,
@@ -151,6 +312,7 @@ export function PodRenderer({
   hideMetricsServer,
   renderImageBrowser,
   renderPodBrowser,
+  resolvedEnvFrom,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -552,6 +714,15 @@ export function PodRenderer({
           })}
         </div>
       </Section>
+
+      {/* Environment Variables */}
+      {[...initContainers, ...containers].some((c: any) => c.env?.length > 0 || c.envFrom?.length > 0) && (
+        <EnvVarsSection
+          initContainers={initContainers}
+          containers={containers}
+          resolvedEnvFrom={resolvedEnvFrom}
+        />
+      )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
       {!hideMetricsServer && !!(metrics?.containers?.length || metricsHistory?.containers?.length || metricsHistory?.collectionError) && (

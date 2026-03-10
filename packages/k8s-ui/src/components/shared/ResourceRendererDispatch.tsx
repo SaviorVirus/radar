@@ -186,6 +186,7 @@ export interface RendererOverrides {
     data: any; onCopy: CopyHandler; copied: string | null
     onNavigate?: (ref: ResourceRef) => void
     onOpenLogs?: (podName: string, containerName: string) => void
+    resolvedEnvFrom?: ResolvedEnvFrom
   }>
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
@@ -255,6 +256,8 @@ interface ResourceRendererDispatchProps {
   showMetrics?: boolean
   /** When provided, container-level Logs buttons call this instead of opening the dock */
   onOpenLogs?: (podName: string, containerName: string) => void
+  /** Resolved ConfigMap/Secret data for envFrom expansion in PodRenderer */
+  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
   /** Optional hint shown in the Events section (e.g. link to Timeline tab) */
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
@@ -267,6 +270,8 @@ interface ResourceRendererDispatchProps {
   renderMetrics?: (props: { kind: string; namespace: string; name: string }) => React.ReactNode
   /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
   rendererOverrides?: RendererOverrides
+  /** Resolved ConfigMap/Secret data for envFrom expansion in PodRenderer */
+  resolvedEnvFrom?: ResolvedEnvFrom
 }
 
 export function ResourceRendererDispatch({
@@ -288,6 +293,7 @@ export function ResourceRendererDispatch({
   eventsLoading,
   renderMetrics,
   rendererOverrides,
+  resolvedEnvFrom,
 }: ResourceRendererDispatchProps) {
   const kind = resource.kind.toLowerCase()
 
@@ -313,7 +319,7 @@ export function ResourceRendererDispatch({
     <div className={renderSidebar ? 'lg:flex' : ''}>
       <div className={clsx('p-4 space-y-4', renderSidebar && 'lg:flex-1 lg:min-w-0')}>
         {/* Kind-specific content - delegates to modular renderers */}
-        {kind === 'pods' && <PodComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} />}
+        {kind === 'pods' && <PodComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} resolvedEnvFrom={resolvedEnvFrom} />}
         {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadComp kind={kind} data={data} onNavigate={onNavigate} />}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} />}
