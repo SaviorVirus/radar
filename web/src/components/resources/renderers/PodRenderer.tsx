@@ -1,5 +1,6 @@
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
+import type { ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCanExec, useCanViewLogs, useCanPortForward } from '../../../contexts/CapabilitiesContext'
 import { usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
@@ -13,9 +14,10 @@ interface PodRendererProps {
   copied: string | null
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
   onOpenLogs?: (podName: string, containerName: string) => void
+  resolvedEnvFrom?: ResolvedEnvFrom
 }
 
-export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs }: PodRendererProps) {
+export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
 
@@ -49,6 +51,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs }: Po
       copied={copied}
       onNavigate={onNavigate}
       onOpenLogs={onOpenLogs}
+      resolvedEnvFrom={resolvedEnvFrom}
       canExec={canExec}
       canViewLogs={canViewLogs}
       canPortForward={canPortForward}

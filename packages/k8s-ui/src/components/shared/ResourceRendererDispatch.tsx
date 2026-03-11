@@ -171,6 +171,7 @@ import {
   TraefikIngressRouteRenderer,
 } from '../resources/renderers'
 import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom } from '../../types'
+import type { CopyHandler } from '../ui/drawer-components'
 
 export interface RendererOverrides {
   PodRenderer?: React.ComponentType<{

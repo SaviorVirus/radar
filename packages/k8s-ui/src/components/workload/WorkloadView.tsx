@@ -94,6 +94,8 @@ interface WorkloadViewProps {
   onUpdateResource?: (params: { kind: string; namespace: string; name: string; yaml: string }) => Promise<void>
   /** Whether the resource is being updated */
   isUpdatingResource?: boolean
+  /** Error message from the last update attempt */
+  updateResourceError?: string | null
 
   // ── Tab state (optional URL sync) ────────────────────────────────────────
   /** Controlled active tab. If not provided, managed internally. */
@@ -156,6 +158,7 @@ export function WorkloadView({
   // Mutations
   onUpdateResource,
   isUpdatingResource,
+  updateResourceError,
   // Tab state
   activeTab: controlledTab,
   onTabChange,
@@ -424,6 +427,9 @@ export function WorkloadView({
               onCopy={(text) => copyToClipboard(text, 'yaml')}
               copied={copied === 'yaml'}
               onSaved={handleSaved}
+              onSave={onUpdateResource}
+              isSaving={isUpdatingResource}
+              saveError={updateResourceError}
             />
           ) : (
             <ResourceRendererDispatch
@@ -625,6 +631,9 @@ export function WorkloadView({
                 onCopy={(text) => copyToClipboard(text, 'yaml')}
                 copied={copied === 'yaml'}
                 onSaved={handleSaved}
+                onSave={onUpdateResource}
+                isSaving={isUpdatingResource}
+                saveError={updateResourceError}
               />
             )}
           </div>
