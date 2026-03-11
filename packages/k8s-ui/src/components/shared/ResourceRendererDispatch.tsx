@@ -170,17 +170,8 @@ import {
   LeaseRenderer,
   TraefikIngressRouteRenderer,
 } from '../resources/renderers'
-import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo } from '../../types'
-import type { CopyHandler } from '../ui/drawer-components'
+import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom } from '../../types'
 
-/**
- * Override map letting each platform consumer swap in its own renderer components.
- * Each override receives only the props that ResourceRendererDispatch passes at its
- * call site — a subset of the base renderer's full props. The override is responsible
- * for wiring any additional behavior (metrics, exec, port-forward, scale, etc.) internally.
- *
- * When an override is not provided, the base (shared) renderer is used.
- */
 export interface RendererOverrides {
   PodRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
@@ -257,7 +248,9 @@ interface ResourceRendererDispatchProps {
   /** When provided, container-level Logs buttons call this instead of opening the dock */
   onOpenLogs?: (podName: string, containerName: string) => void
   /** Resolved ConfigMap/Secret data for envFrom expansion in PodRenderer */
-  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
+  resolvedEnvFrom?: ResolvedEnvFrom
+  /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
+  rendererOverrides?: RendererOverrides
   /** Optional hint shown in the Events section (e.g. link to Timeline tab) */
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
@@ -268,10 +261,6 @@ interface ResourceRendererDispatchProps {
   eventsLoading?: boolean
   /** Render prop for Prometheus metrics charts — injected by the platform wrapper */
   renderMetrics?: (props: { kind: string; namespace: string; name: string }) => React.ReactNode
-  /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
-  rendererOverrides?: RendererOverrides
-  /** Resolved ConfigMap/Secret data for envFrom expansion in PodRenderer */
-  resolvedEnvFrom?: ResolvedEnvFrom
 }
 
 export function ResourceRendererDispatch({
@@ -292,14 +281,13 @@ export function ResourceRendererDispatch({
   events,
   eventsLoading,
   renderMetrics,
-  rendererOverrides,
   resolvedEnvFrom,
+  rendererOverrides,
 }: ResourceRendererDispatchProps) {
   const kind = resource.kind.toLowerCase()
 
   const isKnownKind = KNOWN_KINDS.has(kind)
 
-  // Resolve renderer components — use platform override when provided, otherwise base
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
   const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer

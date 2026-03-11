@@ -328,6 +328,14 @@ export interface SelectedResource {
   group?: string  // API group for CRDs (e.g., 'metrics.k8s.io')
 }
 
+// Resolved envFrom ConfigMap/Secret data for pod env var expansion
+export interface ResolvedEnvFromEntry {
+  keys: string[]
+  values: Record<string, string>
+  isSecret: boolean
+}
+export type ResolvedEnvFrom = Record<string, ResolvedEnvFromEntry>
+
 // Resource reference (for relationships)
 export interface ResourceRef {
   kind: string

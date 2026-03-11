@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
@@ -7,7 +7,7 @@ import {
   WorkloadView as BaseWorkloadView,
   type RendererOverrides,
 } from '@skyhook-io/k8s-ui'
-import type { SelectedResource, ResourceRef } from '../../types'
+import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
@@ -226,28 +226,33 @@ export function WorkloadView({
     return { envFromConfigMapNames: Array.from(cmNames), envFromSecretNames: Array.from(secretNames) }
   }, [isPod, resource])
 
-  const { data: envFromConfigMaps } = useQuery<any[]>({
-    queryKey: ['resources', 'configmaps', undefined, namespace],
-    queryFn: () => fetchJSON(`/resources/configmaps?namespace=${namespace}`),
-    enabled: isPod && envFromConfigMapNames.length > 0,
-    staleTime: 30000,
+  const configMapQueries = useQueries({
+    queries: envFromConfigMapNames.map((cmName) => ({
+      queryKey: ['resources', 'configmaps', namespace, cmName],
+      queryFn: () => fetchJSON<any>(`/resources/configmaps/${namespace}/${cmName}`),
+      enabled: isPod,
+      staleTime: 30000,
+    })),
   })
-  const { data: envFromSecrets } = useQuery<any[]>({
-    queryKey: ['resources', 'secrets', undefined, namespace],
-    queryFn: () => fetchJSON(`/resources/secrets?namespace=${namespace}`),
-    enabled: isPod && envFromSecretNames.length > 0,
-    staleTime: 30000,
+
+  const secretQueries = useQueries({
+    queries: envFromSecretNames.map((secretName) => ({
+      queryKey: ['resources', 'secrets', namespace, secretName],
+      queryFn: () => fetchJSON<any>(`/resources/secrets/${namespace}/${secretName}`),
+      enabled: isPod,
+      staleTime: 30000,
+    })),
   })
 
   const resolvedEnvFrom = useMemo(() => {
     if (!isPod || (envFromConfigMapNames.length === 0 && envFromSecretNames.length === 0)) return undefined
-    const result: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }> = {}
-    for (const n of envFromConfigMapNames) {
-      const cm = envFromConfigMaps?.find((r: any) => r.metadata?.name === n)
+    const result: ResolvedEnvFrom = {}
+    envFromConfigMapNames.forEach((n, i) => {
+      const cm = configMapQueries[i]?.data
       if (cm) result[n] = { keys: Object.keys(cm.data || {}), values: cm.data || {}, isSecret: false }
-    }
-    for (const n of envFromSecretNames) {
-      const secret = envFromSecrets?.find((r: any) => r.metadata?.name === n)
+    })
+    envFromSecretNames.forEach((n, i) => {
+      const secret = secretQueries[i]?.data
       if (secret) {
         const decodedValues: Record<string, string> = {}
         for (const [k, v] of Object.entries(secret.data || {})) {
@@ -255,9 +260,9 @@ export function WorkloadView({
         }
         result[n] = { keys: Object.keys(decodedValues), values: decodedValues, isSecret: true }
       }
-    }
+    })
     return Object.keys(result).length > 0 ? result : undefined
-  }, [isPod, envFromConfigMapNames, envFromSecretNames, envFromConfigMaps, envFromSecrets])
+  }, [isPod, envFromConfigMapNames, envFromSecretNames, configMapQueries, secretQueries])
 
   // Fetch topology for hierarchy building (only when expanded)
   const { data: topology } = useTopology([namespace], 'resources', { enabled: expanded })

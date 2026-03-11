@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatResources, formatDuration } from '../resource-utils'
+import type { ResolvedEnvFrom } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
 
@@ -70,10 +71,9 @@ interface PodRendererProps {
   renderPodBrowser?: (props: { namespace: string; podName: string; containers: string[]; initialContainer: string; onClose: () => void; onSwitchToImageFiles: () => void }) => ReactNode
   /**
    * Resolved content for envFrom references.
-   * Map of resource name → { keys: string[], values: Record<string,string>, isSecret: boolean }
    * When provided, expands ConfigMap/Secret keys inline instead of showing "(all keys)".
    */
-  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
+  resolvedEnvFrom?: ResolvedEnvFrom
 }
 
 // Extract problems from pod status and conditions
@@ -173,6 +173,34 @@ function EnvRow({ name, value, isSecret }: { name: string; value: string; isSecr
   )
 }
 
+function resolveEnvValueNode(env: any): JSX.Element {
+  if (env.valueFrom?.secretKeyRef) {
+    const { name, key } = env.valueFrom.secretKeyRef
+    return <span className="text-yellow-400/60 text-[10px] shrink-0 self-center px-1 py-0.5 bg-yellow-500/10 rounded">secret:{name}[{key}]</span>
+  }
+  if (env.valueFrom?.configMapKeyRef) {
+    const { name, key } = env.valueFrom.configMapKeyRef
+    return <span className="text-blue-400/70 text-[10px] shrink-0 self-center px-1 py-0.5 bg-blue-500/10 rounded">configmap:{name}[{key}]</span>
+  }
+  if (env.valueFrom?.fieldRef) {
+    return <span className="text-purple-400/70 break-all">field:{env.valueFrom.fieldRef.fieldPath}</span>
+  }
+  if (env.valueFrom?.resourceFieldRef) {
+    return <span className="text-purple-400/70 break-all">resource:{env.valueFrom.resourceFieldRef.resource}</span>
+  }
+  return <span className="text-theme-text-primary break-all min-w-0">{env.value ?? ''}</span>
+}
+
+function EnvVarRow({ env }: { env: any }) {
+  return (
+    <div className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
+      <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
+      <span className="text-theme-text-tertiary shrink-0">=</span>
+      {resolveEnvValueNode(env)}
+    </div>
+  )
+}
+
 function EnvVarsSection({
   initContainers,
   containers,
@@ -180,7 +208,7 @@ function EnvVarsSection({
 }: {
   initContainers: any[]
   containers: any[]
-  resolvedEnvFrom?: Record<string, { keys: string[]; values: Record<string, string>; isSecret: boolean }>
+  resolvedEnvFrom?: ResolvedEnvFrom
 }) {
   const allContainers = [...initContainers, ...containers]
   const multiContainer = allContainers.filter((c: any) => c.env?.length > 0 || c.envFrom?.length > 0).length > 1
@@ -236,56 +264,9 @@ function EnvVarsSection({
                 })}
 
                 {/* Individual env vars */}
-                {envVars.map((env: any) => {
-                  if (env.valueFrom?.secretKeyRef) {
-                    return (
-                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
-                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
-                        <span className="text-theme-text-tertiary shrink-0">=</span>
-                        <span className="text-yellow-400/60 text-[10px] shrink-0 self-center px-1 py-0.5 bg-yellow-500/10 rounded">
-                          secret:{env.valueFrom.secretKeyRef.name}[{env.valueFrom.secretKeyRef.key}]
-                        </span>
-                      </div>
-                    )
-                  }
-                  if (env.valueFrom?.configMapKeyRef) {
-                    return (
-                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
-                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
-                        <span className="text-theme-text-tertiary shrink-0">=</span>
-                        <span className="text-blue-400/70 text-[10px] shrink-0 self-center px-1 py-0.5 bg-blue-500/10 rounded">
-                          configmap:{env.valueFrom.configMapKeyRef.name}[{env.valueFrom.configMapKeyRef.key}]
-                        </span>
-                      </div>
-                    )
-                  }
-                  if (env.valueFrom?.fieldRef) {
-                    return (
-                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
-                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
-                        <span className="text-theme-text-tertiary shrink-0">=</span>
-                        <span className="text-purple-400/70 break-all">field:{env.valueFrom.fieldRef.fieldPath}</span>
-                      </div>
-                    )
-                  }
-                  if (env.valueFrom?.resourceFieldRef) {
-                    return (
-                      <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
-                        <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
-                        <span className="text-theme-text-tertiary shrink-0">=</span>
-                        <span className="text-purple-400/70 break-all">resource:{env.valueFrom.resourceFieldRef.resource}</span>
-                      </div>
-                    )
-                  }
-                  // Plain value
-                  return (
-                    <div key={env.name} className="flex items-start gap-1 text-xs font-mono py-0.5 border-b border-theme-border/30 last:border-0">
-                      <span className="text-theme-text-secondary shrink-0 break-all">{env.name}</span>
-                      <span className="text-theme-text-tertiary shrink-0">=</span>
-                      <span className="text-theme-text-primary break-all min-w-0">{env.value ?? ''}</span>
-                    </div>
-                  )
-                })}
+                {envVars.map((env: any) => (
+                  <EnvVarRow key={env.name} env={env} />
+                ))}
               </div>
             </div>
           )
