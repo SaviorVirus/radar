@@ -248,11 +248,12 @@ export function WorkloadView({
     if (!isPod || (envFromConfigMapNames.length === 0 && envFromSecretNames.length === 0)) return undefined
     const result: ResolvedEnvFrom = {}
     envFromConfigMapNames.forEach((n, i) => {
-      const cm = configMapQueries[i]?.data
+      // Single-resource endpoint returns { resource, relationships } wrapper
+      const cm = configMapQueries[i]?.data?.resource ?? configMapQueries[i]?.data
       if (cm) result[n] = { keys: Object.keys(cm.data || {}), values: cm.data || {}, isSecret: false }
     })
     envFromSecretNames.forEach((n, i) => {
-      const secret = secretQueries[i]?.data
+      const secret = secretQueries[i]?.data?.resource ?? secretQueries[i]?.data
       if (secret) {
         const decodedValues: Record<string, string> = {}
         for (const [k, v] of Object.entries(secret.data || {})) {
