@@ -282,6 +282,17 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   }
 
   return (
+    <>
+      {/* Backdrop — closes drawer on click */}
+      <div
+        className={clsx(
+          'fixed inset-0 z-30 transition-opacity duration-300',
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
+        )}
+        style={{ top: headerHeight }}
+        onClick={onClose}
+      />
+
     <div
       className={clsx(
         'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
@@ -533,6 +544,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
       </ConfirmDialog>
     </div>
+    </>
   )
 }
 

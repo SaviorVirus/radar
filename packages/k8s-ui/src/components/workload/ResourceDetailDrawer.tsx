@@ -113,6 +113,19 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   const headerHeight = headerHeightProp ?? 49
 
   return (
+    <>
+      {/* Backdrop — only shown in drawer mode (not expanded), closes on click */}
+      {!expanded && (
+        <div
+          className={clsx(
+            'fixed inset-0 z-30 transition-opacity duration-300',
+            isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
+          )}
+          style={{ top: headerHeight }}
+          onClick={onClose}
+        />
+      )}
+
     <div
       className={clsx(
         'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
@@ -154,5 +167,6 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         onCollapseToDrawer: onCollapse ? () => onCollapse() : undefined,
       })}
     </div>
+    </>
   )
 }
