@@ -24,6 +24,7 @@ import {
   Plus,
   GitCompare,
   Regex,
+  ListChecks,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -1976,6 +1977,7 @@ export function ResourcesView({
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
+    setBulkMode(false)
     setCheckedResources(new Set())
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
@@ -2006,10 +2008,18 @@ export function ResourcesView({
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
-  // Multi-select state for bulk operations
+  // Multi-select state for bulk operations. Checkboxes only render while
+  // bulk mode is active — entered via the toolbar toggle — so the risky
+  // bulk-delete surface stays out of the way during normal browsing.
+  const [bulkMode, setBulkMode] = useState(false)
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const [bulkForceDelete, setBulkForceDelete] = useState(false)
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false)
+    setCheckedResources(new Set())
+  }, [])
 
   // Column filter helpers
   const clearColumnFilter = useCallback((key: string) => {
@@ -2522,6 +2532,7 @@ export function ResourcesView({
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
         if (compareMode) { exitCompareMode(); return }
+        if (bulkMode) { exitBulkMode(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -3417,7 +3428,7 @@ export function ResourcesView({
     return filteredResources.filter(r => checkedResources.has(getResourceKey(r)))
   }, [filteredResources, checkedResources, getResourceKey])
 
-  const isCheckboxMode = onBulkDelete != null
+  const isCheckboxMode = onBulkDelete != null && bulkMode
 
   // Filter columns by visibility
   const columns = useMemo(() => {
@@ -4003,7 +4014,11 @@ export function ResourcesView({
           {compareEnabled && (
             <Tooltip content={compareMode ? 'Exit compare mode' : 'Compare two resources side-by-side'}>
               <button
-                onClick={() => (compareMode ? exitCompareMode() : setCompareMode(true))}
+                onClick={() => {
+                  if (compareMode) { exitCompareMode(); return }
+                  exitBulkMode()
+                  setCompareMode(true)
+                }}
                 aria-pressed={compareMode}
                 className={clsx(
                   'p-2 rounded-lg transition-colors',
@@ -4016,23 +4031,44 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
+          {onBulkDelete && (
+            <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
+              <button
+                onClick={() => {
+                  if (bulkMode) { exitBulkMode(); return }
+                  exitCompareMode()
+                  setBulkMode(true)
+                }}
+                aria-pressed={bulkMode}
+                className={clsx(
+                  'p-2 rounded-lg transition-colors',
+                  bulkMode
+                    ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
+                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
+                )}
+              >
+                <ListChecks className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          )}
         </div>
 
         {/* Bulk actions bar */}
-        {checkedResources.size > 0 && isCheckboxMode && (
-          <div className="flex items-center gap-3 px-4 py-2 bg-blue-500/10 border-b border-blue-500/20 shrink-0">
-            <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+        {isCheckboxMode && (
+          <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
+            <span className="text-sm font-medium text-theme-text-primary">
               {checkedResources.size} selected
             </span>
             <button
               onClick={() => setShowBulkDeleteConfirm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+              disabled={checkedResources.size === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:pointer-events-none text-white rounded-lg transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Delete
             </button>
             <button
-              onClick={() => setCheckedResources(new Set())}
+              onClick={exitBulkMode}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
               Cancel
@@ -4152,7 +4188,7 @@ export function ResourcesView({
                         checked={filteredResources.length > 0 && checkedResources.size === filteredResources.length}
                         ref={(el) => { if (el) el.indeterminate = checkedResources.size > 0 && checkedResources.size < filteredResources.length }}
                         onChange={toggleCheckAll}
-                        className="w-3.5 h-3.5 rounded border-theme-border accent-blue-500 cursor-pointer"
+                        className="w-3.5 h-3.5 rounded border-theme-border accent-skyhook-500 cursor-pointer"
                         title={checkedResources.size > 0 ? 'Deselect all' : 'Select all'}
                       />
                     </th>
@@ -4349,7 +4385,7 @@ export function ResourcesView({
                     isChecked={checkedResources.has(resourceKey)}
                     showCheckbox={isCheckboxMode}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
-                    onClick={() => compareMode ? toggleComparePick(resource) : selectResource(resource, isSelected)}
+                    onClick={() => compareMode ? toggleComparePick(resource) : isCheckboxMode ? toggleChecked(resource) : selectResource(resource, isSelected)}
                     onMouseEnter={() => setHighlightedIndex(-1)}
                     compareMode={compareMode}
                     comparePickIndex={pickIdx}
@@ -4395,7 +4431,7 @@ export function ResourcesView({
         onBulkDelete?.(items, {
           force: bulkForceDelete,
           onSuccess: () => {
-            setCheckedResources(new Set())
+            exitBulkMode()
             setShowBulkDeleteConfirm(false)
             setBulkForceDelete(false)
           },
